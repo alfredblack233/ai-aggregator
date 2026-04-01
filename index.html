@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AI 聚合器</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; user-select:none; }
+    body { overflow:hidden; font-family:system-ui,-apple-system,'Segoe UI',sans-serif; }
+
+    .toolbar {
+      background:#f5f5f7; padding:8px 16px; display:flex; gap:12px;
+      align-items:center; border-bottom:1px solid #ddd; z-index:10; position:relative;
+    }
+    .toolbar input {
+      flex:1; padding:8px 12px; font-size:14px; border:1px solid #ccc;
+      border-radius:8px; outline:none; user-select:text;
+    }
+    .toolbar input:focus { border-color:#007aff; }
+    .toolbar button {
+      background:#007aff; color:white; border:none; padding:6px 14px;
+      border-radius:6px; font-size:13px; cursor:pointer; transition:0.2s; white-space:nowrap;
+    }
+    .toolbar button:hover { background:#005fcb; }
+    .toolbar button:disabled { background:#999; cursor:not-allowed; }
+    #statusBar { font-size:12px; color:#666; min-width:80px; }
+
+    .grid-container {
+      height:calc(100vh - 49px); display:flex; flex-direction:column; background:#2c2c2e;
+    }
+    .row { display:flex; flex:1; min-height:0; }
+
+    .splitter-vertical { width:6px; background:#3a3a3c; cursor:col-resize; transition:background 0.2s; }
+    .splitter-vertical:hover { background:#007aff; }
+    .splitter-horizontal { height:6px; background:#3a3a3c; cursor:row-resize; transition:background 0.2s; }
+    .splitter-horizontal:hover { background:#007aff; }
+
+    .panel { flex:1; position:relative; min-width:0; min-height:0; background:#fff; overflow:hidden; }
+
+    .panel-label {
+      position:absolute; top:8px; left:12px; font-size:11px; font-weight:600;
+      color:rgba(255,255,255,0.7); background:rgba(0,0,0,0.4); backdrop-filter:blur(4px);
+      padding:2px 8px; border-radius:4px; z-index:20; pointer-events:none;
+    }
+
+    webview { width:100%; height:100%; border:none; }
+
+    .refresh-btn {
+      position:absolute; top:8px; right:12px; width:32px; height:32px;
+      background:rgba(0,0,0,0.5); backdrop-filter:blur(4px); border-radius:50%;
+      display:flex; align-items:center; justify-content:center; cursor:pointer;
+      z-index:20; transition:0.2s; color:white; font-size:18px; font-weight:bold;
+      border:none; opacity:0.6;
+    }
+    .refresh-btn:hover { opacity:1; background:rgba(0,0,0,0.7); }
+
+    /* Gemini 登录按钮组 */
+    .gemini-login-group {
+      position:absolute; top:6px; right:52px; display:flex; gap:4px; z-index:20;
+    }
+    .gemini-btn {
+      height:30px; backdrop-filter:blur(4px); border-radius:6px;
+      display:flex; align-items:center; justify-content:center; cursor:pointer;
+      transition:0.2s; color:white; font-size:11px; font-weight:600;
+      border:none; padding:0 8px; opacity:0.85;
+    }
+    .gemini-btn:hover { opacity:1; }
+    .gemini-btn.popup { background:rgba(66,133,244,0.9); }
+    .gemini-btn.popup:hover { background:rgba(66,133,244,1); }
+    .gemini-btn.external { background:rgba(234,67,53,0.9); }
+    .gemini-btn.external:hover { background:rgba(234,67,53,1); }
+
+    .panel.send-success { outline:2px solid #34c759; }
+    .panel.send-fail { outline:2px solid #ff3b30; }
+
+    .drag-overlay {
+      position:fixed; top:0; left:0; width:100%; height:100%;
+      background:transparent; z-index:9999; display:none;
+    }
+  </style>
+</head>
+<body>
+
+<div class="toolbar">
+  <input type="text" id="messageInput" placeholder="输入要发送给所有 AI 的问题..." />
+  <button id="sendBtn">📤 一键发送</button>
+  <button id="resetLayoutBtn">🔄 布局恢复</button>
+  <span id="statusBar"></span>
+</div>
+
+<div class="grid-container">
+  <div class="row" id="row1">
+    <div class="panel" data-panel="doubao">
+      <span class="panel-label">豆包</span>
+      <webview id="wv-doubao" src="https://www.doubao.com/chat/" partition="persist:doubao"
+        useragent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.291 Safari/537.36"></webview>
+      <button class="refresh-btn" data-refresh="doubao">↻</button>
+    </div>
+    <div class="splitter-vertical"></div>
+    <div class="panel" data-panel="deepseek">
+      <span class="panel-label">DeepSeek</span>
+      <webview id="wv-deepseek" src="https://chat.deepseek.com" partition="persist:deepseek"
+        useragent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.291 Safari/537.36"></webview>
+      <button class="refresh-btn" data-refresh="deepseek">↻</button>
+    </div>
+  </div>
+  <div class="splitter-horizontal"></div>
+  <div class="row" id="row2">
+    <div class="panel" data-panel="gemini">
+      <span class="panel-label">Gemini</span>
+      <webview id="wv-gemini" src="https://gemini.google.com"
+        useragent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.291 Safari/537.36"
+        allowpopups></webview>
+      <div class="gemini-login-group">
+        <button class="gemini-btn popup" id="googleLoginBtn" title="在应用内弹窗登录 Google">🔑 弹窗登录</button>
+        <button class="gemini-btn external" id="googleLoginExtBtn" title="在默认浏览器中登录 Google（备用方案）">🌐 浏览器登录</button>
+      </div>
+      <button class="refresh-btn" data-refresh="gemini">↻</button>
+    </div>
+    <div class="splitter-vertical"></div>
+    <div class="panel" data-panel="claude">
+      <span class="panel-label">Claude</span>
+      <webview id="wv-claude" src="https://claude.ai" partition="persist:claude"
+        useragent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.291 Safari/537.36"></webview>
+      <button class="refresh-btn" data-refresh="claude">↻</button>
+    </div>
+  </div>
+</div>
+
+<div id="dragOverlay" class="drag-overlay"></div>
+
+<script>
+  // ========== 0. Google 登录 ==========
+  document.getElementById('googleLoginBtn').addEventListener('click', () => {
+    if (window.electronAPI) {
+      window.electronAPI.openGoogleLogin();
+    } else {
+      alert('electronAPI 未加载');
+    }
+  });
+
+  document.getElementById('googleLoginExtBtn').addEventListener('click', () => {
+    if (window.electronAPI) {
+      window.electronAPI.openGoogleLoginExternal();
+      // 提示用户
+      setTimeout(() => {
+        if (confirm('已在默认浏览器中打开 Google 登录页面。\n\n⚠️ 注意：由于浏览器和本应用的 cookie 不共享，\n此方式可能无法自动同步登录状态。\n\n如果登录后 Gemini 仍未生效，请尝试"弹窗登录"方式。\n\n是否刷新 Gemini？')) {
+          document.getElementById('wv-gemini').reload();
+        }
+      }, 1000);
+    }
+  });
+
+  // ========== 1. 拖拽调整 ==========
+  (function() {
+    const container = document.querySelector('.grid-container');
+    const rows = document.querySelectorAll('.row');
+    const vertSplitters = document.querySelectorAll('.splitter-vertical');
+    const horizSplitter = document.querySelector('.splitter-horizontal');
+    const overlay = document.getElementById('dragOverlay');
+
+    let activeSplitter = null, startPos = 0, startSize1 = 0, startSize2 = 0, isRow = false;
+
+    function onMouseMove(e) {
+      if (!activeSplitter) return;
+      const current = isRow ? e.clientY : e.clientX;
+      const delta = current - startPos;
+      if (isRow) {
+        let h1 = startSize1 + delta, h2 = startSize2 - delta;
+        if (h1 < 100) h1 = 100; if (h2 < 100) h2 = 100;
+        rows[0].style.flex = `${h1}`; rows[1].style.flex = `${h2}`;
+      } else {
+        const panels = activeSplitter.parentElement.querySelectorAll('.panel');
+        let w1 = startSize1 + delta, w2 = startSize2 - delta;
+        if (w1 < 150) w1 = 150; if (w2 < 150) w2 = 150;
+        panels[0].style.flex = `${w1}`; panels[1].style.flex = `${w2}`;
+      }
+    }
+
+    function onMouseUp() {
+      if (!activeSplitter) return;
+      overlay.style.display = 'none'; document.body.style.cursor = '';
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      activeSplitter = null;
+    }
+
+    function startDrag(splitter, rowFlag, e) {
+      e.preventDefault();
+      activeSplitter = splitter; startPos = rowFlag ? e.clientY : e.clientX; isRow = rowFlag;
+      if (rowFlag) {
+        const r1 = parseFloat(getComputedStyle(rows[0]).flex)||1;
+        const r2 = parseFloat(getComputedStyle(rows[1]).flex)||1;
+        const t = r1+r2, h = container.clientHeight;
+        startSize1 = (r1/t)*h; startSize2 = (r2/t)*h;
+        overlay.style.cursor = 'row-resize'; document.body.style.cursor = 'row-resize';
+      } else {
+        const panels = splitter.parentElement.querySelectorAll('.panel');
+        const l = parseFloat(getComputedStyle(panels[0]).flex)||1;
+        const r = parseFloat(getComputedStyle(panels[1]).flex)||1;
+        const t = l+r, w = splitter.parentElement.clientWidth;
+        startSize1 = (l/t)*w; startSize2 = (r/t)*w;
+        overlay.style.cursor = 'col-resize'; document.body.style.cursor = 'col-resize';
+      }
+      overlay.style.display = 'block';
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+    }
+
+    vertSplitters.forEach(s => s.addEventListener('mousedown', e => startDrag(s, false, e)));
+    if (horizSplitter) horizSplitter.addEventListener('mousedown', e => startDrag(horizSplitter, true, e));
+  })();
+
+  // ========== 2. 一键发送 ==========
+  const sendBtn = document.getElementById('sendBtn');
+  const messageInput = document.getElementById('messageInput');
+  const statusBar = document.getElementById('statusBar');
+
+  const webviewReady = {};
+  document.querySelectorAll('webview').forEach(wv => {
+    webviewReady[wv.id] = false;
+    wv.addEventListener('did-finish-load', () => { webviewReady[wv.id] = true; });
+    wv.addEventListener('did-fail-load', () => { webviewReady[wv.id] = false; });
+  });
+
+  function buildSendScript(platform, message) {
+    const escaped = JSON.stringify(message);
+    const H = `
+      function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+      function triggerReactInput(el){
+        const d=Object.getOwnPropertyDescriptor(
+          el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value');
+        if(d&&d.set){d.set.call(el,${escaped});}else{el.value=${escaped};}
+        el.dispatchEvent(new Event('focus',{bubbles:true}));
+        el.dispatchEvent(new Event('input',{bubbles:true}));
+        el.dispatchEvent(new Event('change',{bubbles:true}));
+      }
+      function setContentEditable(el,text){
+        el.focus();
+        const s=window.getSelection(),r=document.createRange();
+        r.selectNodeContents(el);s.removeAllRanges();s.addRange(r);
+        document.execCommand('delete',false,null);
+        document.execCommand('insertText',false,text);
+        el.dispatchEvent(new Event('input',{bubbles:true}));
+      }
+      function pressEnter(el){
+        const o={key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true};
+        el.dispatchEvent(new KeyboardEvent('keydown',o));
+        el.dispatchEvent(new KeyboardEvent('keypress',o));
+        el.dispatchEvent(new KeyboardEvent('keyup',o));
+      }
+      function findVis(sels){
+        for(const s of sels){try{
+          const els=[...document.querySelectorAll(s)].filter(e=>e.offsetParent!==null&&getComputedStyle(e).display!=='none'&&getComputedStyle(e).visibility!=='hidden');
+          if(els.length)return els[els.length-1];
+        }catch(e){}}return null;
+      }
+    `;
+
+    if(platform==='doubao') return `(async()=>{${H}
+      try{await sleep(200);
+        let inp=findVis(['textarea[placeholder]','textarea','[contenteditable="true"]']);
+        if(!inp)return{ok:false,reason:'doubao: no input'};
+        inp.focus();await sleep(100);
+        if(inp.tagName==='TEXTAREA'||inp.tagName==='INPUT'){triggerReactInput(inp);}
+        else{setContentEditable(inp,${escaped});}
+        await sleep(500);
+        let btn=findVis(['[data-testid*="send"]','button[class*="send"]','button[class*="Send"]']);
+        if(!btn){const bs=[...document.querySelectorAll('button')].filter(b=>!b.disabled&&b.offsetParent&&b.closest('[class*="input"],[class*="chat"],[class*="editor"],[class*="footer"],[class*="bottom"]'));btn=bs[bs.length-1];}
+        if(btn){btn.click();return{ok:true,method:'button'};}
+        pressEnter(inp);return{ok:true,method:'enter'};
+      }catch(e){return{ok:false,reason:e.message};}
+    })()`;
+
+    if(platform==='deepseek') return `(async()=>{${H}
+      try{await sleep(200);
+        let inp=findVis(['textarea#chat-input','textarea[placeholder]','textarea']);
+        if(!inp)return{ok:false,reason:'deepseek: no input'};
+        inp.focus();await sleep(100);triggerReactInput(inp);await sleep(500);
+        let btn=findVis(['div[class*="send"] button','button[class*="send"]','button[aria-label*="Send"]','button[aria-label*="send"]']);
+        if(!btn){const bs=[...document.querySelectorAll('button')].filter(b=>!b.disabled&&b.offsetParent&&b.querySelector('svg'));btn=bs.find(b=>b.closest('[class*="input"],[class*="chat"],[class*="bottom"]'));}
+        if(btn){btn.click();return{ok:true,method:'button'};}
+        pressEnter(inp);return{ok:true,method:'enter'};
+      }catch(e){return{ok:false,reason:e.message};}
+    })()`;
+
+    if(platform==='gemini') return `(async()=>{${H}
+      try{await sleep(300);
+        let inp=findVis(['.ql-editor[contenteditable="true"]','rich-textarea [contenteditable]','[contenteditable="true"][aria-label]','.input-area [contenteditable="true"]','[contenteditable="true"]','[contenteditable="plaintext-only"]','textarea']);
+        if(!inp)return{ok:false,reason:'gemini: no input'};
+        inp.focus();await sleep(100);
+        if(inp.tagName==='TEXTAREA'||inp.tagName==='INPUT'){triggerReactInput(inp);}
+        else{setContentEditable(inp,${escaped});}
+        await sleep(600);
+        let btn=findVis(['button[aria-label*="Send"]','button[aria-label*="send"]','button.send-button']);
+        if(!btn){const bs=[...document.querySelectorAll('button,[role="button"]')].filter(b=>!b.disabled&&b.offsetParent);btn=bs.find(b=>(b.getAttribute('aria-label')||'').toLowerCase().match(/send|submit/));}
+        if(btn){btn.click();await sleep(200);return{ok:true,method:'button'};}
+        pressEnter(inp);return{ok:true,method:'enter'};
+      }catch(e){return{ok:false,reason:e.message};}
+    })()`;
+
+    if(platform==='claude') return `(async()=>{${H}
+      try{await sleep(200);
+        let inp=findVis(['.ProseMirror[contenteditable="true"]','div[contenteditable="true"][class*="ProseMirror"]','[contenteditable="true"]','[contenteditable="plaintext-only"]','textarea']);
+        if(!inp)return{ok:false,reason:'claude: no input'};
+        inp.focus();await sleep(100);
+        if(inp.tagName==='TEXTAREA'||inp.tagName==='INPUT'){triggerReactInput(inp);}
+        else{setContentEditable(inp,${escaped});}
+        await sleep(500);
+        let btn=findVis(['button[aria-label*="Send"]','button[aria-label*="send"]','button[data-testid*="send"]']);
+        if(!btn){const f=inp.closest('form,[class*="composer"],[class*="input"]');if(f){const bs=[...f.querySelectorAll('button')].filter(b=>!b.disabled&&b.offsetParent);btn=bs[bs.length-1];}}
+        if(btn){btn.click();return{ok:true,method:'button'};}
+        pressEnter(inp);return{ok:true,method:'enter'};
+      }catch(e){return{ok:false,reason:e.message};}
+    })()`;
+
+    return `(async()=>{${H}
+      try{await sleep(200);
+        let inp=findVis(['textarea','[contenteditable="true"]']);
+        if(!inp)return{ok:false,reason:'no input'};
+        inp.focus();await sleep(100);
+        if(inp.tagName==='TEXTAREA'||inp.tagName==='INPUT'){triggerReactInput(inp);}
+        else{setContentEditable(inp,${escaped});}
+        await sleep(500);pressEnter(inp);return{ok:true,method:'enter'};
+      }catch(e){return{ok:false,reason:e.message};}
+    })()`;
+  }
+
+  function getPlatform(wv){const p=wv.closest('.panel');return p?p.dataset.panel:'unknown';}
+
+  async function sendToWebview(wv,message){
+    if(!wv)return{ok:false,reason:'no webview'};
+    if(!webviewReady[wv.id])return{ok:false,reason:'not loaded'};
+    const platform=getPlatform(wv);
+    try{
+      const result=await wv.executeJavaScript(buildSendScript(platform,message));
+      console.log(`[Send] ${platform}:`,result);
+      return result||{ok:false};
+    }catch(err){
+      console.error(`[Send Error] ${platform}:`,err.message);
+      return{ok:false,reason:err.message};
+    }
+  }
+
+  async function handleSend(){
+    const message=messageInput.value.trim();
+    if(!message){statusBar.textContent='⚠️ 请输入内容';return;}
+    sendBtn.disabled=true; sendBtn.textContent='⏳ 发送中…'; statusBar.textContent='';
+
+    const webviews=document.querySelectorAll('webview');
+    document.querySelectorAll('.panel').forEach(p=>p.classList.remove('send-success','send-fail'));
+
+    let ok=0;
+    await Promise.allSettled(Array.from(webviews).map(async wv=>{
+      const r=await sendToWebview(wv,message);
+      const panel=wv.closest('.panel');
+      if(r&&r.ok){ok++;panel&&panel.classList.add('send-success');setTimeout(()=>panel&&panel.classList.remove('send-success'),2000);}
+      else{panel&&panel.classList.add('send-fail');setTimeout(()=>panel&&panel.classList.remove('send-fail'),2000);}
+    }));
+
+    statusBar.textContent=`✅ ${ok}/${webviews.length} 成功`;
+    sendBtn.disabled=false; sendBtn.textContent='📤 一键发送'; messageInput.value='';
+    setTimeout(()=>{statusBar.textContent='';},3000);
+  }
+
+  sendBtn.addEventListener('click',handleSend);
+  messageInput.addEventListener('keydown',e=>{
+    if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleSend();}
+  });
+
+  // ========== 3. 布局恢复 ==========
+  document.getElementById('resetLayoutBtn').addEventListener('click',()=>{
+    document.querySelectorAll('.row').forEach(r=>r.style.flex='');
+    document.querySelectorAll('.panel').forEach(p=>p.style.flex='');
+    const gc=document.querySelector('.grid-container');
+    gc.style.display='none';requestAnimationFrame(()=>{gc.style.display='flex';});
+  });
+
+  // ========== 4. 刷新按钮 ==========
+  document.querySelectorAll('.refresh-btn').forEach(btn=>{
+    btn.addEventListener('click',e=>{
+      e.stopPropagation();
+      const wv=btn.closest('.panel').querySelector('webview');
+      if(wv&&wv.reload)wv.reload();
+    });
+  });
+</script>
+</body>
+</html>
